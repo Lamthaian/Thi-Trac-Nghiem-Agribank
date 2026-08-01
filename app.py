@@ -3,13 +3,21 @@ import docx
 import re
 import random
 import io
+import json
+import os
 
 # --- 1. CẤU HÌNH TRANG WEB ---
 st.set_page_config(page_title="Thi Trắc Nghiệm Agribank", page_icon="🌱", layout="centered")
 
-# --- 2. KHỞI TẠO BỘ NHỚ TẠM (SESSION STATE) ---
+# --- 2. KHỞI TẠO BỘ NHỚ TẠM VÀ TỰ ĐỘNG ĐỌC DỮ LIỆU ---
 if 'question_bank' not in st.session_state:
-    st.session_state.question_bank = {}
+    # 1. Đọc dữ liệu cứng từ file JSON (nếu có)
+    if os.path.exists('NganHangCauHoi.json'):
+        with open('NganHangCauHoi.json', 'r', encoding='utf-8') as f:
+            st.session_state.question_bank = json.load(f)
+    else:
+        st.session_state.question_bank = {}
+
 if 'session_questions' not in st.session_state:
     st.session_state.session_questions = []
 if 'current_idx' not in st.session_state:
@@ -21,7 +29,7 @@ if 'checked_status' not in st.session_state:
 if 'is_submitted' not in st.session_state:
     st.session_state.is_submitted = False
 
-# Hàm đọc file
+# Hàm đọc file docx
 def parse_docx(file_bytes):
     doc = docx.Document(io.BytesIO(file_bytes))
     text = "\n".join([p.text for p in doc.paragraphs])
@@ -56,22 +64,29 @@ def parse_docx(file_bytes):
 # --- 3. GIAO DIỆN THANH BÊN (SIDEBAR) ---
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/vi/thumb/1/1b/Agribank_Logo.svg/1200px-Agribank_Logo.svg.png", width=150)
-    st.header("📂 NẠP DỮ LIỆU")
-    uploaded_file = st.file_uploader("Tải file .docx đã chuẩn hóa", type=['docx'])
+    
+    # MODULE NẠP DỮ LIỆU TẠM THỜI (LINH HOẠT)
+    st.header("📂 NẠP THÊM CHUYÊN ĐỀ")
+    uploaded_file = st.file_uploader("Tải file .docx", type=['docx'])
     topic_name = st.text_input("Tên chuyên đề:")
     
-    if st.button("Lưu vào Ngân hàng"):
+    if st.button("Nạp vào bộ nhớ tạm"):
         if uploaded_file and topic_name:
             qs = parse_docx(uploaded_file.getvalue())
             if qs:
+                # Bổ sung chuyên đề mới vào ngân hàng đang có trong bộ nhớ
                 st.session_state.question_bank[topic_name] = qs
-                st.success(f"Đã nạp {len(qs)} câu vào '{topic_name}'!")
+                st.success(f"Đã nạp {len(qs)} câu vào chuyên đề '{topic_name}'!")
+                st.rerun() # Tải lại menu để cập nhật danh sách
         else:
             st.error("Vui lòng tải file và nhập tên chuyên đề.")
             
     st.divider()
+    
+    # MODULE TẠO ĐỀ THI
     st.header("⚙️ TẠO ĐỀ THI")
     if st.session_state.question_bank:
+        st.success(f"📚 Hệ thống đang có {len(st.session_state.question_bank)} chuyên đề.")
         selected_topics = st.multiselect("Chọn chuyên đề thi:", list(st.session_state.question_bank.keys()))
         total_qs = st.number_input("Tổng số câu", min_value=1, value=50)
         
@@ -92,12 +107,14 @@ with st.sidebar:
                 st.session_state.checked_status = {i: False for i in range(len(final_pool))}
                 st.session_state.is_submitted = False
                 st.rerun()
+    else:
+        st.warning("Ngân hàng câu hỏi đang trống.")
 
 # --- 4. GIAO DIỆN CHÍNH (KHU VỰC THI) ---
 st.title("🌱 HỆ THỐNG ÔN THI TRẮC NGHIỆM")
 
 if not st.session_state.session_questions:
-    st.info("👈 Bắt đầu bằng cách nạp dữ liệu và chọn 'Bắt đầu thi' ở menu bên trái.")
+    st.info("👈 Bắt đầu bằng cách chọn chuyên đề và bấm 'Bắt đầu thi' ở menu bên trái.")
 else:
     idx = st.session_state.current_idx
     q = st.session_state.session_questions[idx]
@@ -111,26 +128,27 @@ else:
     # Tùy chọn đáp án
     options_list = [f"{k}. {v}" for k, v in q['options'].items()]
     
-    # Nếu chưa NỘP BÀI và cũng chưa CHỐT ĐÁP ÁN câu này
     if not st.session_state.is_submitted and not st.session_state.checked_status.get(idx, False):
         if len(q['answers']) > 1:
             st.caption("*(Câu này có nhiều đáp án đúng)*")
             selected = st.multiselect("Chọn các đáp án:", options_list, default=st.session_state.user_answers[idx])
             st.session_state.user_answers[idx] = selected
+            
+            # Chỉ hiện nút chốt đáp án cho câu nhiều lựa chọn
+            if st.button("✅ Chốt đáp án", key=f"check_{idx}"):
+                if not st.session_state.user_answers[idx]:
+                    st.warning("Vui lòng chọn ít nhất 1 đáp án để kiểm tra!")
+                else:
+                    st.session_state.checked_status[idx] = True
+                    st.rerun()
         else:
-            current_ans = st.session_state.user_answers[idx][0] if st.session_state.user_answers[idx] else None
-            selected = st.radio("Chọn đáp án:", options_list, index=options_list.index(current_ans) if current_ans in options_list else None)
+            # Câu hỏi 1 đáp án -> Tự động chốt khi chạm vào lựa chọn
+            selected = st.radio("Chọn đáp án:", options_list, index=None, key=f"radio_{idx}")
             if selected:
                 st.session_state.user_answers[idx] = [selected]
-                
-        if st.button("✅ Chốt đáp án", key=f"check_{idx}"):
-            if not st.session_state.user_answers[idx]:
-                st.warning("Vui lòng chọn ít nhất 1 đáp án để kiểm tra!")
-            else:
                 st.session_state.checked_status[idx] = True
                 st.rerun()
     else:
-        # KHI ĐÃ CHỐT HOẶC ĐÃ NỘP BÀI -> HIỂN THỊ MÀU SẮC ĐÁP ÁN
         st.markdown("---")
         correct_full = [f"{k}. {q['options'][k]}" for k in q['answers']]
         user_full = st.session_state.user_answers.get(idx, [])
