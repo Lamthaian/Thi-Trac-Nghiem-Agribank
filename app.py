@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import docx
 import re
 import random
@@ -16,10 +16,12 @@ if 'current_idx' not in st.session_state:
     st.session_state.current_idx = 0
 if 'user_answers' not in st.session_state:
     st.session_state.user_answers = {}
+if 'checked_status' not in st.session_state:
+    st.session_state.checked_status = {}
 if 'is_submitted' not in st.session_state:
     st.session_state.is_submitted = False
 
-# Hàm đọc file (Tái sử dụng logic cũ)
+# Hàm đọc file
 def parse_docx(file_bytes):
     doc = docx.Document(io.BytesIO(file_bytes))
     text = "\n".join([p.text for p in doc.paragraphs])
@@ -71,7 +73,7 @@ with st.sidebar:
     st.header("⚙️ TẠO ĐỀ THI")
     if st.session_state.question_bank:
         selected_topics = st.multiselect("Chọn chuyên đề thi:", list(st.session_state.question_bank.keys()))
-        total_qs = st.number_input("Tổng số câu hỏi", min_value=1, value=50)
+        total_qs = st.number_input("Tổng số câu", min_value=1, value=50)
         
         if st.button("🚀 Bắt đầu thi", use_container_width=True):
             if not selected_topics:
@@ -81,14 +83,13 @@ with st.sidebar:
                 for t in selected_topics:
                     pool.extend(st.session_state.question_bank[t])
                 
-                # Trộn và lấy đủ số câu
                 random.shuffle(pool)
                 final_pool = pool[:total_qs]
                 
-                # Cấu hình đề
                 st.session_state.session_questions = final_pool
                 st.session_state.current_idx = 0
                 st.session_state.user_answers = {i: [] for i in range(len(final_pool))}
+                st.session_state.checked_status = {i: False for i in range(len(final_pool))}
                 st.session_state.is_submitted = False
                 st.rerun()
 
@@ -110,31 +111,48 @@ else:
     # Tùy chọn đáp án
     options_list = [f"{k}. {v}" for k, v in q['options'].items()]
     
-    # Nếu chưa nộp bài, cho phép chọn
-    if not st.session_state.is_submitted:
-        # Nếu câu hỏi có nhiều đáp án đúng -> Dùng Multiselect hoặc Checkbox
+    # Nếu chưa NỘP BÀI và cũng chưa CHỐT ĐÁP ÁN câu này
+    if not st.session_state.is_submitted and not st.session_state.checked_status.get(idx, False):
         if len(q['answers']) > 1:
             st.caption("*(Câu này có nhiều đáp án đúng)*")
             selected = st.multiselect("Chọn các đáp án:", options_list, default=st.session_state.user_answers[idx])
             st.session_state.user_answers[idx] = selected
         else:
-            # Câu hỏi 1 đáp án -> Dùng Radio
             current_ans = st.session_state.user_answers[idx][0] if st.session_state.user_answers[idx] else None
             selected = st.radio("Chọn đáp án:", options_list, index=options_list.index(current_ans) if current_ans in options_list else None)
             if selected:
                 st.session_state.user_answers[idx] = [selected]
+                
+        if st.button("✅ Chốt đáp án", key=f"check_{idx}"):
+            if not st.session_state.user_answers[idx]:
+                st.warning("Vui lòng chọn ít nhất 1 đáp án để kiểm tra!")
+            else:
+                st.session_state.checked_status[idx] = True
+                st.rerun()
     else:
-        # Khi đã nộp bài, hiển thị kết quả
+        # KHI ĐÃ CHỐT HOẶC ĐÃ NỘP BÀI -> HIỂN THỊ MÀU SẮC ĐÁP ÁN
         st.markdown("---")
         correct_full = [f"{k}. {q['options'][k]}" for k in q['answers']]
-        user_full = st.session_state.user_answers[idx]
+        user_full = st.session_state.user_answers.get(idx, [])
         
-        if set(correct_full) == set(user_full):
-            st.success("✅ Bạn đã trả lời CHÍNH XÁC!")
+        is_fully_correct = (set(user_full) == set(correct_full))
+        
+        if is_fully_correct:
+            st.markdown("🎉 **Tuyệt vời! Bạn đã trả lời CHÍNH XÁC.**")
         else:
-            st.error(f"❌ Sai. Đáp án đúng là: **{', '.join([k for k in q['answers']])}**")
-            
-        st.info(f"**Chi tiết:**\n{q['explanation']}")
+            st.markdown("⚠️ **Chưa chính xác! Xem lại đáp án bên dưới.**")
+
+        for opt in options_list:
+            if opt in correct_full and opt in user_full:
+                st.success(f"✅ **{opt}**")
+            elif opt in correct_full and opt not in user_full:
+                st.success(f"☑️ **{opt}** *(Đáp án đúng bị sót)*")
+            elif opt not in correct_full and opt in user_full:
+                st.error(f"❌ **{opt}** *(Sai)*")
+            else:
+                st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp; {opt}")
+                
+        st.info(f"**Giải thích chi tiết:**\n{q['explanation']}")
 
     # Các nút điều hướng
     st.markdown("---")
@@ -154,7 +172,7 @@ else:
                 correct_arr = [f"{k}. {question['options'][k]}" for k in question['answers']]
                 if set(st.session_state.user_answers.get(i, [])) == set(correct_arr):
                     score += 1
-            st.metric(label="ĐIỂM SỐ CỦA BẠN", value=f"{score}/{len(st.session_state.session_questions)}")
+            st.metric(label="ĐIỂM SỐ CỦA BẠN", value=f"{score} / {len(st.session_state.session_questions)}")
             
     with col3:
         if st.button("Câu tiếp ➡") and idx < len(st.session_state.session_questions) - 1:
