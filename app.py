@@ -11,7 +11,6 @@ st.set_page_config(page_title="Thi Trắc Nghiệm Agribank", page_icon="🌱", 
 
 # --- 2. KHỞI TẠO BỘ NHỚ TẠM VÀ TỰ ĐỘNG ĐỌC DỮ LIỆU ---
 if 'question_bank' not in st.session_state:
-    # 1. Đọc dữ liệu cứng từ file JSON (nếu có)
     if os.path.exists('NganHangCauHoi.json'):
         with open('NganHangCauHoi.json', 'r', encoding='utf-8') as f:
             st.session_state.question_bank = json.load(f)
@@ -29,7 +28,7 @@ if 'checked_status' not in st.session_state:
 if 'is_submitted' not in st.session_state:
     st.session_state.is_submitted = False
 
-# Hàm đọc file docx
+# Hàm đọc file docx trên Web (Đã đồng bộ bộ key với bản Desktop)
 def parse_docx(file_bytes):
     doc = docx.Document(io.BytesIO(file_bytes))
     text = "\n".join([p.text for p in doc.paragraphs])
@@ -42,22 +41,22 @@ def parse_docx(file_bytes):
         line = line.strip()
         if not line: continue
         if line.startswith('### Câu'):
-            if current_q and len(current_q['options']) > 0: 
+            if current_q and len(current_q.get('raw_options', {})) > 0: 
                 questions_list.append(current_q)
             clean_q = re.sub(r'^### Câu \d+[:\.\-]?\s*', '', line)
-            current_q = {'question': clean_q, 'options': {}, 'answers': [], 'explanation': ''}
+            current_q = {'question': clean_q, 'raw_options': {}, 'raw_answers': [], 'explanation': ''}
         elif current_q is not None:
             if re.match(r'^[A-Z]\.', line):
                 letter = line[0]
                 text_part = line[1:].strip().lstrip('.').strip()
-                current_q['options'][letter] = text_part
+                current_q['raw_options'][letter] = text_part
             elif line.startswith('* Đáp án đúng:'):
                 ans_str = line.split(':', 1)[1].strip().replace('*', '').strip()
-                current_q['answers'] = [x.strip() for x in ans_str.split(',') if x.strip()]
+                current_q['raw_answers'] = [x.strip() for x in ans_str.split(',') if x.strip()]
             elif line.startswith('* Căn cứ') or line.startswith('* Giải thích'):
                 current_q['explanation'] += line + '\n'
                 
-    if current_q and len(current_q['options']) > 0:
+    if current_q and len(current_q.get('raw_options', {})) > 0:
         questions_list.append(current_q)
     return questions_list
 
@@ -65,7 +64,6 @@ def parse_docx(file_bytes):
 with st.sidebar:
     st.image("https://upload.wikimedia.org/wikipedia/vi/thumb/1/1b/Agribank_Logo.svg/1200px-Agribank_Logo.svg.png", width=150)
     
-    # MODULE NẠP DỮ LIỆU TẠM THỜI (LINH HOẠT)
     st.header("📂 NẠP THÊM CHUYÊN ĐỀ")
     uploaded_file = st.file_uploader("Tải file .docx", type=['docx'])
     topic_name = st.text_input("Tên chuyên đề:")
@@ -74,16 +72,14 @@ with st.sidebar:
         if uploaded_file and topic_name:
             qs = parse_docx(uploaded_file.getvalue())
             if qs:
-                # Bổ sung chuyên đề mới vào ngân hàng đang có trong bộ nhớ
                 st.session_state.question_bank[topic_name] = qs
-                st.success(f"Đã nạp {len(qs)} câu vào chuyên đề '{topic_name}'!")
-                st.rerun() # Tải lại menu để cập nhật danh sách
+                st.success(f"Đã nạp {len(qs)} câu vào '{topic_name}'!")
+                st.rerun()
         else:
             st.error("Vui lòng tải file và nhập tên chuyên đề.")
             
     st.divider()
     
-    # MODULE TẠO ĐỀ THI
     st.header("⚙️ TẠO ĐỀ THI")
     if st.session_state.question_bank:
         st.success(f"📚 Hệ thống đang có {len(st.session_state.question_bank)} chuyên đề.")
@@ -119,22 +115,22 @@ else:
     idx = st.session_state.current_idx
     q = st.session_state.session_questions[idx]
     
-    # Hiển thị tiến độ
+    # KẾT NỐI DỮ LIỆU ĐA NGUỒN (Xử lý mượt cả JSON máy tính và DOCX web)
+    q_options = q.get('options', q.get('raw_options', {}))
+    q_answers = q.get('answers', q.get('raw_answers', []))
+    
     st.progress((idx + 1) / len(st.session_state.session_questions), text=f"Câu {idx + 1} / {len(st.session_state.session_questions)}")
     
-    # Hiển thị câu hỏi
     st.markdown(f"### Câu {idx + 1}: {q['question']}")
     
-    # Tùy chọn đáp án
-    options_list = [f"{k}. {v}" for k, v in q['options'].items()]
+    options_list = [f"{k}. {v}" for k, v in q_options.items()]
     
     if not st.session_state.is_submitted and not st.session_state.checked_status.get(idx, False):
-        if len(q['answers']) > 1:
+        if len(q_answers) > 1:
             st.caption("*(Câu này có nhiều đáp án đúng)*")
             selected = st.multiselect("Chọn các đáp án:", options_list, default=st.session_state.user_answers[idx])
             st.session_state.user_answers[idx] = selected
             
-            # Chỉ hiện nút chốt đáp án cho câu nhiều lựa chọn
             if st.button("✅ Chốt đáp án", key=f"check_{idx}"):
                 if not st.session_state.user_answers[idx]:
                     st.warning("Vui lòng chọn ít nhất 1 đáp án để kiểm tra!")
@@ -142,7 +138,6 @@ else:
                     st.session_state.checked_status[idx] = True
                     st.rerun()
         else:
-            # Câu hỏi 1 đáp án -> Tự động chốt khi chạm vào lựa chọn
             selected = st.radio("Chọn đáp án:", options_list, index=None, key=f"radio_{idx}")
             if selected:
                 st.session_state.user_answers[idx] = [selected]
@@ -150,7 +145,7 @@ else:
                 st.rerun()
     else:
         st.markdown("---")
-        correct_full = [f"{k}. {q['options'][k]}" for k in q['answers']]
+        correct_full = [f"{k}. {q_options[k]}" for k in q_answers]
         user_full = st.session_state.user_answers.get(idx, [])
         
         is_fully_correct = (set(user_full) == set(correct_full))
@@ -170,9 +165,8 @@ else:
             else:
                 st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp; {opt}")
                 
-        st.info(f"**Giải thích chi tiết:**\n{q['explanation']}")
+        st.info(f"**Giải thích chi tiết:**\n{q.get('explanation', '')}")
 
-    # Các nút điều hướng
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
@@ -187,7 +181,9 @@ else:
         else:
             score = 0
             for i, question in enumerate(st.session_state.session_questions):
-                correct_arr = [f"{k}. {question['options'][k]}" for k in question['answers']]
+                q_opt = question.get('options', question.get('raw_options', {}))
+                q_ans = question.get('answers', question.get('raw_answers', []))
+                correct_arr = [f"{k}. {q_opt[k]}" for k in q_ans]
                 if set(st.session_state.user_answers.get(i, [])) == set(correct_arr):
                     score += 1
             st.metric(label="ĐIỂM SỐ CỦA BẠN", value=f"{score} / {len(st.session_state.session_questions)}")
